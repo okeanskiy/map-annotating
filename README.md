@@ -1,6 +1,7 @@
 # Map Annotator
 
-A local, 2D, single-level **map annotation tool** for laying out large-scale maps: which areas are
+A local, 2D, single-level **map annotation tool** for laying out large-scale maps, on top of your own
+reference images if you like (a terrain drawing, a sketch, a map screenshot): which areas are
 what, where a river flows, where the roads run, what each place should feel like. It is
 built so that **AI agents (like Claude) can read and write the same document** you're editing.
 
@@ -29,8 +30,8 @@ Optionally run `npm link` to get a global `mapdoc` command.
 ```
 my-map/
   map.json        ← the document (single source of truth)
-  preview.png     ← rendered image, updated by the editor while it's open
-  background.png  ← optional reference image you uploaded to trace over
+  preview.png     ← rendered image of everything, updated by the editor while it's open
+  *.png / *.jpg   ← image layers you added (terrain drawings, screenshots…)
   AGENTS.md       ← format + workflow guide for agents
   CLAUDE.md       ← points Claude Code at AGENTS.md
 ```
@@ -61,11 +62,19 @@ CLI helpers for agents and scripts:
 - **Draw:** click to add points. Double-click, `Enter` or right-click finishes; `Esc` cancels.
 - **Edit:** drag a shape to move it, drag vertices to reshape it, click a midpoint dot to add a vertex,
   and Alt+click a vertex to remove it. Use `Delete` to remove the selected shape.
-- **View:** scroll to zoom. Drag empty space, hold Space and drag, or use the middle mouse button to pan. `F` fits the map.
+- **Images:** click **▣ Image**, paste one (`Ctrl+V`, e.g. a Google Maps screenshot) or drop files onto
+  the map. Images always sit beneath the annotations and appear in `preview.png`.
+  - The first image added to an empty map becomes a locked base layer, and the map frame is sized to fit it.
+  - Other images are placed in view, unlocked. Drag an image to move it and drag its corners to
+    resize it (hold `Shift` to stretch it out of proportion), then tick **Locked** so clicks pass through it.
+  - The inspector has exact position, size and opacity, plus "Fit into map frame" and "Set map frame to image".
+- **View:** the canvas and grid are unbounded. Scroll to zoom. Drag empty space, hold Space and drag, or use the
+  middle mouse button to pan. `F` fits everything into view.
 - **Inspector:** name, id, category, notes, color, line width/direction, and free-form properties.
-  With nothing selected, it shows map settings: size, units, background image and categories.
+  With nothing selected, it shows map settings: name, notes, frame size, units and categories.
 
-Coordinates: `(0, 0)` is the top-left corner, +x is east and +y is south, in whatever `units` you choose.
+Coordinates: +x is east and +y is south, in whatever `units` you choose. The map frame runs from `(0, 0)` to
+`(width, height)` and marks the intended play area.
 
 ## Development
 

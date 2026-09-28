@@ -1,5 +1,5 @@
 {
-  "format": "map-annotation/1",
+  "format": "map-annotation/2",
   "name": "Riverlands",
   "notes": "Open-world starter region. Players arrive by boat in the south-west and push north toward the ruined keep. Keep sight lines long across the plains; the forest is the only dense cover. Three-lane feel: river valley, king's road, forest ridge.",
   "units": "m",
@@ -7,7 +7,7 @@
     "width": 2000,
     "height": 1500
   },
-  "background": null,
+  "images": [],
   "categories": {
     "water": {
       "color": "#3b82f6",

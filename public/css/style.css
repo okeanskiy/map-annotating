@@ -130,7 +130,7 @@ button:disabled {
   width: 100%;
   min-height: 0;
   display: block;
-  background: #dfe3e8;
+  background: #ebe8e1;
   cursor: default;
   touch-action: none;
   user-select: none;
@@ -145,10 +145,20 @@ button:disabled {
   cursor: pointer;
 }
 #canvas [data-vertex],
-#canvas [data-mid] {
+#canvas [data-mid],
+#canvas [data-img] {
   cursor: move;
 }
-#canvas.drawing [data-fid] {
+#canvas [data-corner='0'],
+#canvas [data-corner='2'] {
+  cursor: nwse-resize;
+}
+#canvas [data-corner='1'],
+#canvas [data-corner='3'] {
+  cursor: nesw-resize;
+}
+#canvas.drawing [data-fid],
+#canvas.drawing [data-img] {
   cursor: crosshair;
 }
 
@@ -241,6 +251,9 @@ button:disabled {
 }
 .feature-list li.selected {
   background: var(--accent-soft);
+}
+.feature-list .image-swatch {
+  background: linear-gradient(135deg, #94a3b8, #e2e8f0);
 }
 .feature-list .swatch {
   width: 10px;

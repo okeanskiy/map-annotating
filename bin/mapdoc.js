@@ -51,11 +51,17 @@ function load(target) {
   return { file, ...parseMap(text) };
 }
 
-/** Drops agent-facing docs into a map folder so any agent opened there knows the format. */
+/**
+ * Drops agent-facing docs into a map folder so any agent opened there knows the format.
+ * An AGENTS.md that is an older copy of our guide is refreshed; one the user wrote is left alone.
+ */
 function writeAgentDocs(dir) {
   const agents = path.join(dir, 'AGENTS.md');
   const claude = path.join(dir, 'CLAUDE.md');
-  if (!fs.existsSync(agents)) fs.copyFileSync(GUIDE, agents);
+  const guide = fs.readFileSync(GUIDE, 'utf8');
+  const heading = guide.split('\n')[0];
+  const current = fs.existsSync(agents) ? fs.readFileSync(agents, 'utf8') : null;
+  if (current === null || (current.startsWith(heading) && current !== guide)) fs.writeFileSync(agents, guide);
   if (!fs.existsSync(claude)) fs.writeFileSync(claude, '@AGENTS.md\n');
 }
 
@@ -95,7 +101,12 @@ switch (cmd) {
     break;
   }
   case 'validate': {
-    const { file, errors, warnings } = load(positional[0]);
+    const { file, doc, errors, warnings } = load(positional[0]);
+    for (const img of doc?.images || []) {
+      if (typeof img.file === 'string' && !fs.existsSync(path.join(path.dirname(file), img.file))) {
+        warnings.push(`image "${img.id}": file "${img.file}" not found next to map.json`);
+      }
+    }
     for (const w of warnings) console.log(`warning: ${w}`);
     for (const e of errors) console.log(`error: ${e}`);
     console.log(errors.length ? `${file}: ${errors.length} error(s)` : `${file}: valid`);

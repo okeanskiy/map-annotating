@@ -27,7 +27,7 @@ const put = (url, body) =>
 test('creates map.json and saves edits', () =>
   withServer(async ({ dir, url }) => {
     const { doc, rev } = await (await fetch(`${url}/api/map`)).json();
-    assert.equal(doc.format, 'map-annotation/1');
+    assert.equal(doc.format, 'map-annotation/2');
     doc.features.push({ id: 'spawn', type: 'point', points: [[10, 10]] });
     const res = await put(url, { doc, baseRev: rev });
     assert.equal(res.status, 200);
@@ -56,4 +56,14 @@ test('refuses to serve files outside the project folder', () =>
   withServer(async ({ url }) => {
     const res = await fetch(`${url}/project/..%2F..%2Fetc%2Fpasswd`);
     assert.notEqual(res.status, 200);
+  }));
+
+test('uploads get safe, unique file names', () =>
+  withServer(async ({ dir, url }) => {
+    const up = async (name) =>
+      (await fetch(`${url}/api/upload?name=${encodeURIComponent(name)}`, { method: 'POST', body: 'x' })).json();
+    assert.equal((await up('Marco Island map.png')).file, 'Marco-Island-map.png');
+    assert.equal((await up('Marco Island map.png')).file, 'Marco-Island-map-2.png');
+    assert.equal((await up('../../evil.png')).file, 'evil.png');
+    assert.ok(fs.existsSync(path.join(dir, 'Marco-Island-map-2.png')));
   }));

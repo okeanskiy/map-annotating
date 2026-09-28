@@ -1,7 +1,8 @@
 // Shared document model: used by the browser app, the local server and the CLI.
 // No dependencies, no DOM access — keep it that way so it runs everywhere.
 
-export const FORMAT = 'map-annotation/1';
+export const FORMAT = 'map-annotation/2';
+const FORMAT_V1 = 'map-annotation/1';
 export const FEATURE_TYPES = ['area', 'line', 'point'];
 export const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
@@ -23,10 +24,39 @@ export function createMap({ name = 'Untitled map', width = 1000, height = 1000, 
     notes: '',
     units,
     bounds: { width, height },
-    background: null,
+    images: [],
     categories: structuredClone(DEFAULT_CATEGORIES),
     features: [],
   };
+}
+
+// ----------------------------------------------------------------- migration
+
+/**
+ * Upgrades older documents to the current format. Returns the same object if it
+ * is already current (or not recognisable — validation reports that).
+ * v1 -> v2: the single "background" became an "images" layer list.
+ */
+export function migrateMap(doc) {
+  if (!doc || typeof doc !== 'object' || doc.format !== FORMAT_V1) return doc;
+  const { background, ...rest } = doc;
+  const images = [];
+  if (background && typeof background === 'object' && typeof background.image === 'string') {
+    const ids = new Set((doc.features || []).map((f) => f && f.id));
+    let id = 'background';
+    for (let n = 2; ids.has(id); n++) id = `background-${n}`;
+    images.push({
+      id,
+      file: background.image,
+      x: 0,
+      y: 0,
+      width: doc.bounds?.width ?? 1000,
+      height: doc.bounds?.height ?? 1000,
+      opacity: background.opacity ?? 1,
+      locked: true,
+    });
+  }
+  return { ...rest, format: FORMAT, images };
 }
 
 // ---------------------------------------------------------------- validation
@@ -58,13 +88,44 @@ export function validateMap(doc) {
     errors.push('"bounds" must be { "width": >0, "height": >0 }');
   }
 
-  if (doc.background !== undefined && doc.background !== null) {
-    const bg = doc.background;
-    if (typeof bg !== 'object' || typeof bg.image !== 'string' || !bg.image) {
-      errors.push('"background" must be null or { "image": "<file in the map folder>", "opacity"?: 0..1 }');
-    } else if (bg.opacity !== undefined && (!isNum(bg.opacity) || bg.opacity < 0 || bg.opacity > 1)) {
-      errors.push('"background.opacity" must be a number between 0 and 1');
-    }
+  const seen = new Set();
+  const images = doc.images ?? [];
+  if (!Array.isArray(images)) {
+    errors.push('"images" must be an array');
+  } else {
+    images.forEach((img, i) => {
+      const where = img && typeof img.id === 'string' ? `image "${img.id}"` : `images[${i}]`;
+      if (!img || typeof img !== 'object' || Array.isArray(img)) {
+        errors.push(`${where} must be an object`);
+        return;
+      }
+      if (typeof img.id !== 'string' || !ID_PATTERN.test(img.id)) {
+        errors.push(`${where}: "id" must be a string matching ${ID_PATTERN}`);
+      } else if (seen.has(img.id)) {
+        errors.push(`${where}: duplicate id`);
+      } else {
+        seen.add(img.id);
+      }
+      if (
+        typeof img.file !== 'string' ||
+        !img.file ||
+        img.file.split(/[\\/]/).includes('..') ||
+        /^[\\/]/.test(img.file)
+      ) {
+        errors.push(`${where}: "file" must be a path relative to the map folder, e.g. "terrain.png"`);
+      }
+      for (const k of ['x', 'y']) if (!isNum(img[k])) errors.push(`${where}: "${k}" must be a number`);
+      for (const k of ['width', 'height'])
+        if (!isNum(img[k]) || img[k] <= 0) errors.push(`${where}: "${k}" must be > 0`);
+      if (img.opacity !== undefined && (!isNum(img.opacity) || img.opacity < 0 || img.opacity > 1)) {
+        errors.push(`${where}: "opacity" must be a number between 0 and 1`);
+      }
+      if (img.locked !== undefined && typeof img.locked !== 'boolean')
+        errors.push(`${where}: "locked" must be a boolean`);
+      for (const k of ['name', 'notes']) {
+        if (img[k] !== undefined && typeof img[k] !== 'string') errors.push(`${where}: "${k}" must be a string`);
+      }
+    });
   }
 
   const cats = doc.categories ?? {};
@@ -89,7 +150,6 @@ export function validateMap(doc) {
     return { errors, warnings };
   }
 
-  const seen = new Set();
   doc.features.forEach((f, i) => {
     const where = f && typeof f.id === 'string' ? `feature "${f.id}"` : `features[${i}]`;
     if (!f || typeof f !== 'object' || Array.isArray(f)) {
@@ -99,7 +159,7 @@ export function validateMap(doc) {
     if (typeof f.id !== 'string' || !ID_PATTERN.test(f.id)) {
       errors.push(`${where}: "id" must be a string matching ${ID_PATTERN}`);
     } else if (seen.has(f.id)) {
-      errors.push(`${where}: duplicate id`);
+      errors.push(`${where}: duplicate id (ids are shared by features and images)`);
     } else {
       seen.add(f.id);
     }
@@ -112,10 +172,6 @@ export function validateMap(doc) {
       const min = MIN_POINTS[f.type];
       if (f.type === 'point' && f.points.length !== 1) errors.push(`${where}: a point needs exactly 1 point`);
       else if (f.points.length < min) errors.push(`${where}: a ${f.type} needs at least ${min} points`);
-      if (b && isNum(b.width) && isNum(b.height)) {
-        const out = f.points.some(([x, y]) => x < 0 || y < 0 || x > b.width || y > b.height);
-        if (out) warnings.push(`${where}: some points lie outside the map bounds`);
-      }
     }
     for (const key of ['name', 'notes', 'category']) {
       if (f[key] !== undefined && typeof f[key] !== 'string') errors.push(`${where}: "${key}" must be a string`);
@@ -142,7 +198,8 @@ export function validateMap(doc) {
  * Pretty JSON with every [x, y] pair kept on one line, so the file stays short,
  * readable and diff-friendly for both humans and agents.
  */
-const MAP_KEY_ORDER = ['format', 'name', 'notes', 'units', 'bounds', 'background', 'categories', 'features'];
+const MAP_KEY_ORDER = ['format', 'name', 'notes', 'units', 'bounds', 'images', 'categories', 'features'];
+const IMAGE_KEY_ORDER = ['id', 'name', 'file', 'x', 'y', 'width', 'height', 'opacity', 'locked', 'notes'];
 const FEATURE_KEY_ORDER = ['id', 'type', 'name', 'category', 'color', 'notes', 'width', 'directed', 'props', 'points'];
 
 function orderKeys(obj, order) {
@@ -157,6 +214,11 @@ export function stringifyMap(doc) {
   if (Array.isArray(ordered.features)) {
     ordered.features = ordered.features.map((f) => (f && typeof f === 'object' ? orderKeys(f, FEATURE_KEY_ORDER) : f));
   }
+  if (Array.isArray(ordered.images)) {
+    ordered.images = ordered.images.map((img) =>
+      img && typeof img === 'object' ? orderKeys(img, IMAGE_KEY_ORDER) : img,
+    );
+  }
   const json = JSON.stringify(ordered, null, 2);
   return json.replace(/\[\s*(-?[\d.eE+-]+),\s*(-?[\d.eE+-]+)\s*\]/g, '[$1, $2]') + '\n';
 }
@@ -164,7 +226,7 @@ export function stringifyMap(doc) {
 export function parseMap(text) {
   let doc;
   try {
-    doc = JSON.parse(text);
+    doc = migrateMap(JSON.parse(text));
   } catch (e) {
     return { doc: null, errors: [`invalid JSON: ${e.message}`], warnings: [] };
   }
@@ -188,6 +250,28 @@ export function bbox(points) {
     if (y < minY) minY = y;
     if (x > maxX) maxX = x;
     if (y > maxY) maxY = y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/** Rectangle covering the map bounds, every image and every feature. */
+export function mapExtent(doc) {
+  let minX = 0,
+    minY = 0,
+    maxX = doc.bounds.width,
+    maxY = doc.bounds.height;
+  for (const img of doc.images || []) {
+    minX = Math.min(minX, img.x);
+    minY = Math.min(minY, img.y);
+    maxX = Math.max(maxX, img.x + img.width);
+    maxY = Math.max(maxY, img.y + img.height);
+  }
+  for (const f of doc.features) {
+    const b = bbox(f.points);
+    minX = Math.min(minX, b.minX);
+    minY = Math.min(minY, b.minY);
+    maxX = Math.max(maxX, b.maxX);
+    maxY = Math.max(maxY, b.maxY);
   }
   return { minX, minY, maxX, maxY };
 }
@@ -331,9 +415,8 @@ export function describeMap(doc) {
   const lines = [];
   lines.push(`Map: ${doc.name || '(unnamed)'}`);
   lines.push(
-    `Size: ${fmt(doc.bounds.width)} × ${fmt(doc.bounds.height)} ${u}. Origin (0, 0) is the top-left corner; +x is east/right, +y is south/down.`,
+    `Map frame: ${fmt(doc.bounds.width)} × ${fmt(doc.bounds.height)} ${u}. Origin (0, 0) is the frame's top-left corner; +x is east/right, +y is south/down. The canvas is unbounded, so content may lie outside the frame.`,
   );
-  if (doc.background) lines.push(`Background image: ${doc.background.image} (stretched over the full bounds)`);
   if (doc.notes) lines.push(`Notes: ${doc.notes}`);
 
   const cats = doc.categories || {};
@@ -345,6 +428,20 @@ export function describeMap(doc) {
     lines.push(`  ${id} ${c.color}${c.description ? ` — ${c.description}` : ''} [${counts[id] || 0} features]`);
   }
   if (counts['(none)']) lines.push(`  (no category) [${counts['(none)']} features]`);
+
+  const images = doc.images || [];
+  if (images.length) {
+    lines.push('');
+    lines.push(`Images (${images.length}, drawn beneath all features, bottom to top):`);
+    for (const img of images) {
+      const label = img.name ? ` "${img.name}"` : '';
+      lines.push(
+        `- ${img.id}${label}: ${img.file}, covers x ${fmt(img.x)}–${fmt(img.x + img.width)}, y ${fmt(img.y)}–${fmt(img.y + img.height)}` +
+          `${img.opacity !== undefined && img.opacity < 1 ? `, opacity ${img.opacity}` : ''}`,
+      );
+      if (img.notes) lines.push(`    notes: ${img.notes}`);
+    }
+  }
 
   const rel = relations(doc);
   lines.push('');

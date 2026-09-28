@@ -1,4 +1,13 @@
-import { ID_PATTERN, bbox, centroid, polygonArea, polylineLength, polylineMidpoint, round } from './model.js';
+import {
+  ID_PATTERN,
+  bbox,
+  centroid,
+  mapExtent,
+  polygonArea,
+  polylineLength,
+  polylineMidpoint,
+  round,
+} from './model.js';
 
 const $ = (sel) => document.querySelector(sel);
 const svg = $('#canvas');
@@ -11,7 +20,7 @@ const DEFAULT_COLOR = '#64748b';
 const SELECT_COLOR = '#0ea5e9';
 const HINTS = {
   select:
-    'Click to select · Drag to move · Drag handles to reshape · Click a midpoint dot to add a vertex · Alt+click a vertex to delete it · Drag empty space to pan',
+    'Click to select · Drag to move · Drag handles to reshape (Shift: free image resize) · Click a midpoint dot to add a vertex · Alt+click a vertex to delete it · Drag empty space to pan · Paste or drop images onto the map',
   area: 'Click to add corners · Double-click, Enter or right-click to finish · Backspace removes the last corner · Esc cancels',
   line: 'Click to add points · Double-click, Enter or right-click to finish · Backspace removes the last point · Esc cancels',
   point: 'Click to place a point',
@@ -35,8 +44,7 @@ const state = {
   saving: false,
   saveAgain: false,
   previewTimer: null,
-  bgVersion: 0,
-  bgCache: { key: null, url: null },
+  imageDataUrls: new Map(),
   connectedOnce: false,
 };
 
@@ -77,8 +85,22 @@ function getFeature(id) {
   return state.doc?.features.find((f) => f.id === id) ?? null;
 }
 
+function getImage(id) {
+  return state.doc?.images?.find((img) => img.id === id) ?? null;
+}
+
+/** The selected feature, if the selection is a feature. */
 function selected() {
   return getFeature(state.selectedId);
+}
+
+/** The selected image, if the selection is an image. */
+function selectedImage() {
+  return getImage(state.selectedId);
+}
+
+function idTaken(id) {
+  return !!(getFeature(id) || getImage(id));
 }
 
 function featureColor(doc, f) {
@@ -86,9 +108,8 @@ function featureColor(doc, f) {
 }
 
 function nextId(prefix) {
-  const used = new Set(state.doc.features.map((f) => f.id));
   let n = 1;
-  while (used.has(`${prefix}-${n}`)) n++;
+  while (idTaken(`${prefix}-${n}`)) n++;
   return `${prefix}-${n}`;
 }
 
@@ -144,7 +165,7 @@ function redo() {
 
 /** Call after mutating state.doc. */
 function changed({ inspector: rebuildInspector = false } = {}) {
-  if (state.selectedId && !selected()) state.selectedId = null;
+  if (state.selectedId && !idTaken(state.selectedId)) state.selectedId = null;
   render();
   renderList();
   renderTitle();
@@ -229,7 +250,7 @@ function adopt(msg, { external = false } = {}) {
   state.rev = msg.rev;
   state.diskErrors = null;
   state.diskRev = msg.rev;
-  if (state.selectedId && !selected()) state.selectedId = null;
+  if (state.selectedId && !idTaken(state.selectedId)) state.selectedId = null;
   if (!hadDoc) fitView();
   renderBanner();
   renderAll();
@@ -245,10 +266,10 @@ function schedulePreview() {
   state.previewTimer = setTimeout(writePreview, 1200);
 }
 
-async function backgroundDataUrl(doc) {
-  const key = `${doc.background.image}#${state.bgVersion}`;
-  if (state.bgCache.key === key) return state.bgCache.url;
-  const res = await fetch(bgHref(doc));
+/** Images must be inlined as data URLs to be drawn into the preview canvas. */
+async function imageDataUrl(file) {
+  if (state.imageDataUrls.has(file)) return state.imageDataUrls.get(file);
+  const res = await fetch(imageHref(file));
   if (!res.ok) return null;
   const blob = await res.blob();
   const url = await new Promise((resolve) => {
@@ -256,7 +277,7 @@ async function backgroundDataUrl(doc) {
     r.onload = () => resolve(r.result);
     r.readAsDataURL(blob);
   });
-  state.bgCache = { key, url };
+  state.imageDataUrls.set(file, url);
   return url;
 }
 
@@ -265,13 +286,19 @@ async function writePreview() {
   const doc = state.doc;
   if (!doc || state.diskErrors) return;
   try {
-    const { width: W, height: H } = doc.bounds;
+    // Cover everything: the map frame, all images and all features.
+    const e = mapExtent(doc);
+    const pad = Math.max(e.maxX - e.minX, e.maxY - e.minY) * 0.02;
+    const clip = { minX: e.minX - pad, minY: e.minY - pad, maxX: e.maxX + pad, maxY: e.maxY + pad };
+    const W = clip.maxX - clip.minX;
+    const H = clip.maxY - clip.minY;
     const k = 2048 / Math.max(W, H);
     const pw = Math.round(W * k);
     const ph = Math.round(H * k);
-    const bg = doc.background ? await backgroundDataUrl(doc) : null;
-    const body = mapSvg(doc, 1.4 / k, { bgHref: bg, interactive: false });
-    const text = `<svg xmlns="http://www.w3.org/2000/svg" width="${pw}" height="${ph}" viewBox="0 0 ${W} ${H}">${body}</svg>`;
+    const urls = new Map();
+    for (const img of doc.images || []) urls.set(img.file, await imageDataUrl(img.file));
+    const body = mapSvg(doc, 1.4 / k, { imageUrl: (file) => urls.get(file), interactive: false, clip });
+    const text = `<svg xmlns="http://www.w3.org/2000/svg" width="${pw}" height="${ph}" viewBox="${clip.minX} ${clip.minY} ${W} ${H}">${body}</svg>`;
     const url = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' }));
     const img = new Image();
     img.src = url;
@@ -290,49 +317,64 @@ async function writePreview() {
 
 // ---------------------------------------------------------------- rendering
 
-function bgHref(doc) {
-  return `/project/${encodeURIComponent(doc.background.image)}?v=${state.bgVersion}`;
+function imageHref(file) {
+  return `/project/${file.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 /**
- * SVG markup for the map in world coordinates. `u` is the size of one screen
- * pixel in world units, so strokes/labels keep a constant on-screen size.
+ * SVG markup for the map in world coordinates, covering the `clip` rectangle.
+ * `u` is the size of one screen pixel in world units, so strokes and labels
+ * keep a constant on-screen size. Layer order: canvas, images, grid, map
+ * frame, features, labels.
  */
-function mapSvg(doc, u, { bgHref: bg = null, interactive = true, clip = null } = {}) {
+function mapSvg(doc, u, { imageUrl = imageHref, interactive = true, clip }) {
   const { width: W, height: H } = doc.bounds;
-  let out = `<rect x="0" y="0" width="${W}" height="${H}" fill="#f7f5ef"/>`;
-  if (doc.background && bg) {
-    const op = doc.background.opacity ?? 1;
-    out += `<image href="${esc(bg)}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="none" opacity="${op}"/>`;
-  }
-  out += gridSvg(W, H, u, clip);
-  out += `<rect x="0" y="0" width="${W}" height="${H}" fill="none" stroke="#475569" stroke-width="${1.5 * u}"/>`;
+  const cw = clip.maxX - clip.minX;
+  const ch = clip.maxY - clip.minY;
+  let out = `<rect x="${clip.minX}" y="${clip.minY}" width="${cw}" height="${ch}" fill="#ebe8e1" pointer-events="none"/>`;
+  out += `<rect x="0" y="0" width="${W}" height="${H}" fill="#f7f5ef" pointer-events="none"/>`;
+  for (const img of doc.images || []) out += imageSvg(img, imageUrl(img.file), interactive);
+  out += gridSvg(u, clip);
+  out += `<rect x="0" y="0" width="${W}" height="${H}" fill="none" stroke="#475569" stroke-width="${1.5 * u}" pointer-events="none"/>`;
   for (const f of doc.features) out += featureSvg(doc, f, u, interactive);
   for (const f of doc.features) out += labelSvg(f, u, interactive);
   return out;
 }
 
-function gridSvg(W, H, u, clip) {
+function imageSvg(img, href, interactive) {
+  if (!href) return '';
+  // Locked images ignore the pointer so clicks fall through to panning.
+  const hit = interactive && !img.locked ? ` data-img="${esc(img.id)}"` : ' pointer-events="none"';
+  return `<image href="${esc(href)}" x="${img.x}" y="${img.y}" width="${img.width}" height="${img.height}" preserveAspectRatio="none" opacity="${img.opacity ?? 1}"${hit}/>`;
+}
+
+/** An unbounded grid: lines and coordinate labels across the whole visible area. */
+function gridSvg(u, clip) {
   const step = niceStep(90 * u);
-  const x0 = clip ? Math.max(0, Math.floor(clip.minX / step) * step) : 0;
-  const x1 = clip ? Math.min(W, clip.maxX) : W;
-  const y0 = clip ? Math.max(0, Math.floor(clip.minY / step) * step) : 0;
-  const y1 = clip ? Math.min(H, clip.maxY) : H;
-  let d = '';
+  const x0 = Math.floor(clip.minX / step) * step;
+  const y0 = Math.floor(clip.minY / step) * step;
+  const major = [];
+  const minor = [];
   let labels = '';
   const fs = 10 * u;
-  const labelStyle = `font-size="${fs}" fill="#64748b" font-family="system-ui, sans-serif"`;
-  const topY = Math.max(0, clip ? clip.minY : 0) + fs * 1.2;
-  const leftX = Math.max(0, clip ? clip.minX : 0) + 3 * u;
-  for (let x = x0; x <= x1; x += step) {
-    if (x > 0 && x < W) d += `M${x} 0V${H}`;
+  const labelStyle = `font-size="${fs}" fill="#64748b" font-family="system-ui, sans-serif" stroke="#f7f5ef" stroke-width="${2.5 * u}" paint-order="stroke"`;
+  const topY = clip.minY + fs * 1.2;
+  const leftX = clip.minX + 3 * u;
+  const isMajor = (v) => Math.abs(Math.round(v / step) % 5) === 0;
+  for (let i = 0, x = x0; x <= clip.maxX && i < 1000; i++, x = x0 + i * step) {
+    (isMajor(x) ? major : minor).push(`M${x} ${clip.minY}V${clip.maxY}`);
     labels += `<text x="${x + 3 * u}" y="${topY}" ${labelStyle}>${num(x)}</text>`;
   }
-  for (let y = y0; y <= y1; y += step) {
-    if (y > 0 && y < H) d += `M0 ${y}H${W}`;
-    if (y > 0) labels += `<text x="${leftX}" y="${y - 3 * u}" ${labelStyle}>${num(y)}</text>`;
+  for (let i = 0, y = y0; y <= clip.maxY && i < 1000; i++, y = y0 + i * step) {
+    (isMajor(y) ? major : minor).push(`M${clip.minX} ${y}H${clip.maxX}`);
+    if (y > clip.minY + fs * 2) labels += `<text x="${leftX}" y="${y - 3 * u}" ${labelStyle}>${num(y)}</text>`;
   }
-  return `<path d="${d}" fill="none" stroke="#94a3b8" stroke-opacity="0.4" stroke-width="${u}"/><g pointer-events="none">${labels}</g>`;
+  return (
+    `<g pointer-events="none">` +
+    `<path d="${minor.join('')}" fill="none" stroke="#94a3b8" stroke-opacity="0.3" stroke-width="${u}"/>` +
+    `<path d="${major.join('')}" fill="none" stroke="#64748b" stroke-opacity="0.4" stroke-width="${u}"/>` +
+    `${labels}</g>`
+  );
 }
 
 function arrowsSvg(points, color, u) {
@@ -406,7 +448,26 @@ function labelSvg(f, u, interactive) {
   return `<text x="${x}" y="${y}" font-size="${12 * u}" font-family="system-ui, sans-serif" font-weight="600" text-anchor="${anchor}" fill="#1e293b" stroke="#fff" stroke-width="${3 * u}" stroke-linejoin="round" paint-order="stroke" pointer-events="none">${esc(text)}</text>`;
 }
 
+function imageSelectionSvg(img, u) {
+  const c = SELECT_COLOR;
+  const { x, y, width: w, height: h } = img;
+  let out = `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${c}" stroke-width="${2 * u}" stroke-dasharray="${6 * u} ${4 * u}" pointer-events="none"/>`;
+  if (img.locked) return out;
+  const r = 5 * u;
+  [
+    [x, y],
+    [x + w, y],
+    [x + w, y + h],
+    [x, y + h],
+  ].forEach(([cx, cy], i) => {
+    out += `<rect x="${cx - r}" y="${cy - r}" width="${2 * r}" height="${2 * r}" fill="#fff" stroke="${c}" stroke-width="${2 * u}" data-corner="${i}"/>`;
+  });
+  return out;
+}
+
 function selectionSvg(u) {
+  const img = selectedImage();
+  if (img) return imageSelectionSvg(img, u);
   const f = selected();
   if (!f) return '';
   const c = SELECT_COLOR;
@@ -462,10 +523,9 @@ function render() {
   const { x, y, scale: s } = state.view;
   const u = 1 / s;
   const clip = { minX: x, minY: y, maxX: x + w * u, maxY: y + h * u };
-  const bg = state.doc.background ? bgHref(state.doc) : null;
   svg.innerHTML =
     `<g transform="translate(${-x * s} ${-y * s}) scale(${s})">` +
-    mapSvg(state.doc, u, { bgHref: bg, interactive: true, clip }) +
+    mapSvg(state.doc, u, { interactive: true, clip }) +
     selectionSvg(u) +
     draftSvg(u) +
     '</g>';
@@ -481,26 +541,42 @@ function renderTitle() {
 function renderList() {
   const list = $('#feature-list');
   const doc = state.doc;
-  $('#feature-count').textContent = doc ? `(${doc.features.length})` : '';
-  if (!doc || !doc.features.length) {
-    list.innerHTML = `<li class="empty">No features yet. Pick a tool above and draw on the map.</li>`;
+  const images = doc?.images || [];
+  $('#feature-count').textContent = doc ? `(${doc.features.length + images.length})` : '';
+  if (!doc || !(doc.features.length + images.length)) {
+    list.innerHTML = `<li class="empty">Nothing here yet. Pick a tool above and draw on the map, or paste/drop an image onto it.</li>`;
     return;
   }
-  // Topmost first, like a layer list.
-  list.innerHTML = doc.features
+  // Topmost first, like a layer list. Images always sit beneath all features.
+  const imageRows = images
     .slice()
     .reverse()
     .map(
       (
-        f,
-      ) => `<li data-id="${esc(f.id)}" class="${f.id === state.selectedId ? 'selected' : ''}" title="${esc(f.notes || '')}">
+        img,
+      ) => `<li data-id="${esc(img.id)}" class="${img.id === state.selectedId ? 'selected' : ''}" title="${esc(img.file)}">
+        <span class="swatch image-swatch"></span>
+        <span class="icon">▣</span>
+        <span class="name">${esc(img.name || img.id)}</span>
+        <span class="fid">${img.locked ? '🔒 ' : ''}${img.name ? esc(img.id) : 'image'}</span>
+      </li>`,
+    )
+    .join('');
+  list.innerHTML =
+    doc.features
+      .slice()
+      .reverse()
+      .map(
+        (
+          f,
+        ) => `<li data-id="${esc(f.id)}" class="${f.id === state.selectedId ? 'selected' : ''}" title="${esc(f.notes || '')}">
         <span class="swatch" style="background:${featureColor(doc, f)}"></span>
         <span class="icon">${TYPE_ICON[f.type] || '?'}</span>
         <span class="name">${esc(f.name || f.id)}</span>
         <span class="fid">${f.name ? esc(f.id) : ''}</span>
       </li>`,
-    )
-    .join('');
+      )
+      .join('') + imageRows;
 }
 
 function renderToolbar() {
@@ -633,9 +709,41 @@ function featureInspector(f) {
   return html;
 }
 
+function imageInspector(img) {
+  const units = esc(state.doc.units || 'units');
+  const numField = (label, key) =>
+    field(label, `<input type="number" step="any" data-field="i.${key}" value="${round(img[key], 3)}">`);
+  let html = `<h2>▣ Image <span class="type-badge">${esc(img.file)}</span></h2>`;
+  html += field(
+    'Name',
+    `<input type="text" data-field="i.name" value="${esc(img.name || '')}" placeholder="e.g. Terrain sketch">`,
+  );
+  html += field('ID', `<input type="text" data-field="i.id" value="${esc(img.id)}">`);
+  html += `<div class="inline">${numField(`X (${units})`, 'x')}${numField(`Y (${units})`, 'y')}</div>`;
+  html += `<div class="inline">${numField('Width', 'width')}${numField('Height', 'height')}</div>`;
+  html += `<div class="muted" style="margin:-4px 0 8px">Changing width or height keeps the aspect ratio. Drag corners on the map to resize (hold Shift to stretch).</div>`;
+  html += field(
+    'Opacity',
+    `<input type="range" min="0" max="1" step="0.05" data-field="i.opacity" value="${img.opacity ?? 1}">`,
+  );
+  html += `<label class="field check"><input type="checkbox" data-field="i.locked" ${img.locked ? 'checked' : ''}><span>Locked (can't be moved, clicks pass through to the map)</span></label>`;
+  html += field(
+    'Notes — what this image shows, how reliable it is',
+    `<textarea data-field="i.notes" rows="3" placeholder="e.g. Rough terrain sketch; coastline is accurate, hills are not">${esc(img.notes || '')}</textarea>`,
+  );
+  html += `<div class="actions">
+    <button data-action="zoom-to">Zoom to</button>
+    <button data-action="image-fit-frame">Fit into map frame</button>
+    <button data-action="frame-to-image">Set map frame to image</button>
+    <button data-action="front">Bring forward</button>
+    <button data-action="back">Send backward</button>
+    <button data-action="delete" class="danger">Remove</button>
+  </div>`;
+  return html;
+}
+
 function mapInspector() {
   const doc = state.doc;
-  const bg = doc.background;
   let html = `<h2>Map</h2>`;
   html += field('Name', `<input type="text" data-field="m.name" value="${esc(doc.name || '')}">`);
   html += field(
@@ -643,22 +751,14 @@ function mapInspector() {
     `<textarea data-field="m.notes" rows="5" placeholder="What is this map? Genre, scale, mood, how players move through it…">${esc(doc.notes || '')}</textarea>`,
   );
   html += `<div class="inline">
-    ${field('Width', `<input type="number" min="0" step="any" data-field="m.width" value="${doc.bounds.width}">`)}
-    ${field('Height', `<input type="number" min="0" step="any" data-field="m.height" value="${doc.bounds.height}">`)}
+    ${field('Frame width', `<input type="number" min="0" step="any" data-field="m.width" value="${doc.bounds.width}">`)}
+    ${field('Frame height', `<input type="number" min="0" step="any" data-field="m.height" value="${doc.bounds.height}">`)}
     ${field('Units', `<input type="text" data-field="m.units" value="${esc(doc.units || '')}" placeholder="m">`)}
   </div>`;
-  html += `<h3>Background image</h3>`;
-  if (bg) {
-    html += `<div class="muted" style="margin-bottom:6px">${esc(bg.image)} (stretched over the map bounds)</div>`;
-    html += field(
-      'Opacity',
-      `<input type="range" min="0" max="1" step="0.05" data-field="m.bgOpacity" value="${bg.opacity ?? 1}">`,
-    );
-    html += `<div class="actions"><button data-action="bg-upload">Replace…</button><button data-action="bg-remove" class="danger">Remove</button></div>`;
-  } else {
-    html += `<div class="muted" style="margin-bottom:6px">Optional: a sketch, heightmap or top-down render to trace over.</div>`;
-    html += `<button data-action="bg-upload">Choose image…</button>`;
-  }
+  html += `<div class="muted" style="margin:-4px 0 8px">The map frame (0, 0 to width, height) is a reference; the canvas itself is unbounded.</div>`;
+  html += `<h3>Images</h3>`;
+  html += `<div class="muted" style="margin-bottom:6px">Terrain drawings, sketches, satellite or map screenshots to annotate on top of. Images sit beneath all features and appear in preview.png. You can also paste (Ctrl+V) or drop images onto the map.</div>`;
+  html += `<button data-action="image-add">Add image…</button>`;
   html += `<h3>Categories</h3>`;
   html += Object.entries(doc.categories || {})
     .map(
@@ -688,7 +788,9 @@ function renderInspector() {
   const caret = focusKey && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
 
   const f = selected();
-  inspector.innerHTML = `<fieldset ${state.diskErrors ? 'disabled' : ''}>${f ? featureInspector(f) : mapInspector()}</fieldset>`;
+  const img = selectedImage();
+  const body = f ? featureInspector(f) : img ? imageInspector(img) : mapInspector();
+  inspector.innerHTML = `<fieldset ${state.diskErrors ? 'disabled' : ''}>${body}</fieldset>`;
 
   if (focusKey) {
     const el = [...inspector.querySelectorAll('[data-field]')].find(
@@ -756,10 +858,20 @@ inspector.addEventListener('input', (e) => {
       checkpoint(key);
       doc[key.slice(2)] = v;
       break;
-    case 'm.bgOpacity':
-      checkpoint(key);
-      doc.background.opacity = Number(v);
+    case 'i.name':
+    case 'i.notes': {
+      const img = selectedImage();
+      checkpoint(`${key}:${img.id}`);
+      if (v) img[key.slice(2)] = v;
+      else delete img[key.slice(2)];
       break;
+    }
+    case 'i.opacity': {
+      const img = selectedImage();
+      checkpoint(`${key}:${img.id}`);
+      img.opacity = Number(v);
+      break;
+    }
     case 'c.color':
       checkpoint(`${key}:${el.dataset.cat}`);
       doc.categories[el.dataset.cat].color = v;
@@ -790,8 +902,8 @@ inspector.addEventListener('change', (e) => {
         el.value = f.id;
         return;
       }
-      if (getFeature(id)) {
-        toast(`Another feature already uses the id "${id}".`, 'error');
+      if (idTaken(id)) {
+        toast(`Another feature or image already uses the id "${id}".`, 'error');
         el.value = f.id;
         return;
       }
@@ -811,6 +923,47 @@ inspector.addEventListener('change', (e) => {
       if (el.checked) f.directed = true;
       else delete f.directed;
       break;
+    case 'i.id': {
+      const img = selectedImage();
+      const id = el.value.trim();
+      if (id === img.id) return;
+      if (!ID_PATTERN.test(id) || idTaken(id)) {
+        toast('Image ids must be unique and use letters, digits, "-", "_" or ".".', 'error');
+        el.value = img.id;
+        return;
+      }
+      checkpoint();
+      img.id = id;
+      state.selectedId = id;
+      break;
+    }
+    case 'i.x':
+    case 'i.y':
+    case 'i.width':
+    case 'i.height': {
+      const img = selectedImage();
+      const k = key.slice(2);
+      const n = Number(el.value);
+      const size = k === 'width' || k === 'height';
+      if (el.value === '' || !Number.isFinite(n) || (size && n <= 0)) {
+        el.value = round(img[k], 3);
+        return;
+      }
+      checkpoint();
+      if (k === 'width') img.height = round((img.height * n) / img.width, 3);
+      if (k === 'height') img.width = round((img.width * n) / img.height, 3);
+      img[k] = n;
+      changed({ inspector: true });
+      return;
+    }
+    case 'i.locked': {
+      checkpoint();
+      const img = selectedImage();
+      if (el.checked) img.locked = true;
+      else delete img.locked;
+      changed({ inspector: true });
+      return;
+    }
     case 'm.width':
     case 'm.height': {
       const n = Number(el.value);
@@ -851,17 +1004,24 @@ inspector.addEventListener('click', (e) => {
   if (!btn || readOnly()) return;
   const doc = state.doc;
   const f = selected();
+  const img = selectedImage();
   const i = Number(btn.dataset.index);
   switch (btn.dataset.action) {
     case 'delete':
       deleteSelected();
       return;
     case 'zoom-to':
-      zoomTo(f);
+      zoomToId(state.selectedId);
       return;
     case 'front':
     case 'back': {
       checkpoint();
+      if (img) {
+        doc.images = doc.images.filter((x) => x !== img);
+        if (btn.dataset.action === 'front') doc.images.push(img);
+        else doc.images.unshift(img);
+        break;
+      }
       doc.features = doc.features.filter((x) => x !== f);
       if (btn.dataset.action === 'front') doc.features.push(f);
       else doc.features.unshift(f);
@@ -893,13 +1053,33 @@ inspector.addEventListener('click', (e) => {
       setProps(f, Object.fromEntries(entries));
       break;
     }
-    case 'bg-upload':
-      $('#bg-file').click();
+    case 'image-add':
+      $('#image-file').click();
       return;
-    case 'bg-remove':
+    case 'image-fit-frame': {
       checkpoint();
-      doc.background = null;
+      Object.assign(
+        img,
+        containRect(img.width / img.height, { minX: 0, minY: 0, maxX: doc.bounds.width, maxY: doc.bounds.height }),
+      );
       break;
+    }
+    case 'frame-to-image': {
+      // Move the frame's origin to the image's top-left by shifting everything.
+      checkpoint();
+      const dx = img.x;
+      const dy = img.y;
+      for (const other of doc.images) {
+        other.x = round(other.x - dx, 3);
+        other.y = round(other.y - dy, 3);
+      }
+      for (const feat of doc.features) feat.points = feat.points.map(([x, y]) => [round(x - dx, 3), round(y - dy, 3)]);
+      doc.bounds = { width: round(img.width, 3), height: round(img.height, 3) };
+      state.view.x -= dx;
+      state.view.y -= dy;
+      toast('The map frame now matches this image. Everything was shifted so the image starts at (0, 0).');
+      break;
+    }
     case 'cat-add': {
       checkpoint();
       let id = 'category';
@@ -927,35 +1107,100 @@ inspector.addEventListener('click', (e) => {
   changed({ inspector: true });
 });
 
-$('#bg-file').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
+$('#image-file').addEventListener('change', async (e) => {
+  const files = [...e.target.files];
   e.target.value = '';
-  if (!file || readOnly()) return;
-  const ext = (file.name.match(/\.(png|jpe?g|webp|gif)$/i)?.[1] || 'png').toLowerCase();
-  const name = `background.${ext}`;
-  const res = await fetch(`/api/upload?name=${encodeURIComponent(name)}`, { method: 'POST', body: file });
-  if (!res.ok) {
-    toast('Upload failed', 'error');
+  for (const file of files) await addImageFile(file);
+});
+
+/** Largest rect with the given aspect ratio that fits centered inside `box`. */
+function containRect(aspect, box, fill = 1) {
+  const bw = (box.maxX - box.minX) * fill;
+  const bh = (box.maxY - box.minY) * fill;
+  const width = Math.min(bw, bh * aspect);
+  const height = width / aspect;
+  const x = (box.minX + box.maxX) / 2 - width / 2;
+  const y = (box.minY + box.maxY) / 2 - height / 2;
+  return { x: round(x, 3), y: round(y, 3), width: round(width, 3), height: round(height, 3) };
+}
+
+function imageExt(file) {
+  const fromName = file.name?.match(/\.(png|jpe?g|webp|gif)$/i)?.[1];
+  if (fromName) return fromName.toLowerCase();
+  return { 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }[file.type] || 'png';
+}
+
+/**
+ * Uploads an image into the map folder and adds it as a layer. With no images
+ * or features yet it becomes the base layer and the map frame is sized to it;
+ * otherwise it is placed in the middle of the view (or at `at`, for drops).
+ */
+async function addImageFile(file, { at = null } = {}) {
+  if (readOnly() || !file || !/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
+    if (file) toast('Only PNG, JPEG, WebP and GIF images are supported.', 'error');
     return;
   }
-  const img = new Image();
-  img.src = URL.createObjectURL(file);
-  await img.decode().catch(() => {});
+  const stem = (file.name || 'pasted-image').replace(/\.[^.]+$/, '');
+  const res = await fetch(`/api/upload?name=${encodeURIComponent(`${stem}.${imageExt(file)}`)}`, {
+    method: 'POST',
+    body: file,
+  });
+  if (!res.ok) {
+    toast('Image upload failed', 'error');
+    return;
+  }
+  const { file: saved } = await res.json();
+  const probe = new Image();
+  probe.src = URL.createObjectURL(file);
+  await probe.decode().catch(() => {});
+  URL.revokeObjectURL(probe.src);
+  const aspect = probe.naturalWidth && probe.naturalHeight ? probe.naturalWidth / probe.naturalHeight : 1;
+
   const doc = state.doc;
   checkpoint();
-  doc.background = { image: name, opacity: doc.background?.opacity ?? 1 };
-  state.bgVersion++;
-  if (img.naturalWidth && img.naturalHeight) {
-    const h = round((doc.bounds.width * img.naturalHeight) / img.naturalWidth, 3);
-    if (Math.abs(h - doc.bounds.height) > 1e-6) {
-      doc.bounds.height = h;
-      toast(`Map height set to ${num(h)} to match the image's aspect ratio.`);
+  doc.images = doc.images || [];
+  const first = !doc.images.length && !doc.features.length;
+  let rect;
+  if (first) {
+    doc.bounds.height = round(doc.bounds.width / aspect, 3);
+    rect = { x: 0, y: 0, width: doc.bounds.width, height: doc.bounds.height };
+  } else {
+    const u = 1 / state.view.scale;
+    const view = {
+      minX: state.view.x,
+      minY: state.view.y,
+      maxX: state.view.x + svg.clientWidth * u,
+      maxY: state.view.y + svg.clientHeight * u,
+    };
+    rect = containRect(aspect, view, 0.6);
+    if (at) {
+      rect.x = round(at[0] - rect.width / 2, 3);
+      rect.y = round(at[1] - rect.height / 2, 3);
     }
   }
-  URL.revokeObjectURL(img.src);
+  const slug = stem
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, '-')
+    .replace(/^[-.]+|-+$/g, '');
+  // Names like "1.png" or "Screenshot 2026-09-28" make poor ids; fall back to "image".
+  const base = /[a-z]{2}/.test(slug) && !/^screenshot/.test(slug) ? slug : 'image';
+  const id = idTaken(base) ? nextId(base) : base;
+  const img = { id, file: saved, ...rect, opacity: 1 };
+  if (first) img.locked = true;
+  doc.images.push(img);
+  state.selectedId = id;
+  state.tool = 'select';
+  renderToolbar();
   changed({ inspector: true });
-  fitView();
-});
+  if (first) {
+    fitView();
+    toast(
+      'Image added as the base layer; the map frame now matches it. It is locked, so you can draw and pan over it freely.',
+    );
+  } else {
+    toast('Image added. Drag it or its corners to place it, then tick "Locked" in the sidebar.');
+  }
+}
 
 // ------------------------------------------------------------------ editing
 
@@ -975,9 +1220,11 @@ function setTool(tool) {
 
 function deleteSelected() {
   const f = selected();
-  if (!f || readOnly()) return;
+  const img = selectedImage();
+  if ((!f && !img) || readOnly()) return;
   checkpoint();
-  state.doc.features = state.doc.features.filter((x) => x !== f);
+  if (f) state.doc.features = state.doc.features.filter((x) => x !== f);
+  else state.doc.images = state.doc.images.filter((x) => x !== img);
   state.selectedId = null;
   changed({ inspector: true });
 }
@@ -1032,12 +1279,15 @@ function fitRect(minX, minY, maxX, maxY, pad = 0.08) {
 
 function fitView() {
   if (!state.doc) return;
-  fitRect(0, 0, state.doc.bounds.width, state.doc.bounds.height);
+  const e = mapExtent(state.doc);
+  fitRect(e.minX, e.minY, e.maxX, e.maxY);
 }
 
-function zoomTo(f) {
-  if (!f) return;
-  const b = bbox(f.points);
+function zoomToId(id) {
+  const f = getFeature(id);
+  const img = getImage(id);
+  if (!f && !img) return;
+  const b = f ? bbox(f.points) : { minX: img.x, minY: img.y, maxX: img.x + img.width, maxY: img.y + img.height };
   const minSize = Math.max(state.doc.bounds.width, state.doc.bounds.height) * 0.08;
   const cx = (b.minX + b.maxX) / 2;
   const cy = (b.minY + b.maxY) / 2;
@@ -1085,9 +1335,21 @@ svg.addEventListener('pointerdown', (e) => {
   }
 
   if (e.button !== 0) return;
-  const target = e.target.closest('[data-vertex],[data-mid],[data-fid]');
+  const target = e.target.closest('[data-vertex],[data-mid],[data-corner],[data-fid],[data-img]');
   const f = selected();
-  if (target?.dataset.vertex !== undefined && f) {
+  const selImg = selectedImage();
+  if (target?.dataset.corner !== undefined && selImg) {
+    const c = Number(target.dataset.corner);
+    const { x, y, width, height } = selImg;
+    // The corner opposite the dragged one stays put.
+    const anchor = [c === 1 || c === 2 ? x : x + width, c === 2 || c === 3 ? y : y + height];
+    drag = { kind: 'resize-image', corner: c, anchor, aspect: width / height, moved: false };
+  } else if (target?.dataset.img !== undefined) {
+    const id = target.dataset.img;
+    if (id !== state.selectedId) select(id);
+    const img = getImage(id);
+    drag = { kind: 'move-image', start: w, orig: [img.x, img.y], moved: false };
+  } else if (target?.dataset.vertex !== undefined && f) {
     const idx = Number(target.dataset.vertex);
     if (e.altKey) {
       if (f.type === 'point' || f.points.length <= MIN_POINTS[f.type]) {
@@ -1131,6 +1393,37 @@ svg.addEventListener('pointermove', (e) => {
     const s = drag.view.scale;
     state.view.x = drag.view.x - (e.clientX - drag.cx) / s;
     state.view.y = drag.view.y - (e.clientY - drag.cy) / s;
+    render();
+    return;
+  }
+  if (drag.kind === 'move-image' || drag.kind === 'resize-image') {
+    const img = selectedImage();
+    if (!img) return;
+    if (!drag.moved) {
+      checkpoint();
+      drag.moved = true;
+    }
+    const d = coordDigits();
+    if (drag.kind === 'move-image') {
+      img.x = round(drag.orig[0] + w[0] - drag.start[0], d);
+      img.y = round(drag.orig[1] + w[1] - drag.start[1], d);
+    } else {
+      const sx = drag.corner === 1 || drag.corner === 2 ? 1 : -1;
+      const sy = drag.corner === 2 || drag.corner === 3 ? 1 : -1;
+      const [ax, ay] = drag.anchor;
+      const min = 4 / state.view.scale;
+      let width = Math.max(min, (w[0] - ax) * sx);
+      let height = Math.max(min, (w[1] - ay) * sy);
+      if (!e.shiftKey) {
+        // Keep the aspect ratio, following whichever axis the pointer moved further along.
+        if (width / drag.aspect > height) height = width / drag.aspect;
+        else width = height * drag.aspect;
+      }
+      img.width = round(width, d);
+      img.height = round(height, d);
+      img.x = round(sx > 0 ? ax : ax - width, d);
+      img.y = round(sy > 0 ? ay : ay - height, d);
+    }
     render();
     return;
   }
@@ -1253,7 +1546,28 @@ $('#feature-list').addEventListener('click', (e) => {
 });
 $('#feature-list').addEventListener('dblclick', (e) => {
   const li = e.target.closest('[data-id]');
-  if (li) zoomTo(getFeature(li.dataset.id));
+  if (li) zoomToId(li.dataset.id);
+});
+
+$('#btn-image').addEventListener('click', () => !readOnly() && $('#image-file').click());
+
+// Paste an image (e.g. a map screenshot) straight from the clipboard.
+window.addEventListener('paste', (e) => {
+  if (e.target.closest?.('input, textarea')) return;
+  const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+  if (!files.length) return;
+  e.preventDefault();
+  files.forEach((f) => addImageFile(f));
+});
+
+svg.addEventListener('dragover', (e) => {
+  if ([...e.dataTransfer.types].includes('Files')) e.preventDefault();
+});
+svg.addEventListener('drop', async (e) => {
+  const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
+  if (!files.length) return;
+  e.preventDefault();
+  for (const f of files) await addImageFile(f, { at: toWorld(e) });
 });
 
 $('#banner').addEventListener('click', (e) => {

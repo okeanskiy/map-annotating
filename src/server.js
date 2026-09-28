@@ -145,12 +145,19 @@ export function startServer({ dir, port = 4178, host = '127.0.0.1', log = consol
     }
 
     if (url.pathname === '/api/upload' && req.method === 'POST') {
-      const name = path.basename(url.searchParams.get('name') || '');
-      const ext = path.extname(name).toLowerCase();
-      if (!name || !IMAGE_EXTS.has(ext)) return sendJson(res, 400, { error: 'expected an image file name' });
-      const target = safeJoin(root, name);
-      if (!target) return sendJson(res, 400, { error: 'bad file name' });
-      fs.writeFileSync(target, await readBody(req));
+      const requested = path.basename(url.searchParams.get('name') || '');
+      const ext = path.extname(requested).toLowerCase();
+      if (!IMAGE_EXTS.has(ext)) return sendJson(res, 400, { error: 'expected an image file name' });
+      // Keep names filesystem- and URL-friendly, and never overwrite an existing file.
+      const stem =
+        path
+          .basename(requested, path.extname(requested))
+          .replace(/[^A-Za-z0-9_.-]+/g, '-')
+          .replace(/^[-.]+|-+$/g, '') || 'image';
+      let name = `${stem}${ext}`;
+      for (let n = 2; fs.existsSync(path.join(root, name)); n++) name = `${stem}-${n}${ext}`;
+      const data = await readBody(req);
+      fs.writeFileSync(path.join(root, name), data);
       return sendJson(res, 200, { file: name });
     }
 
