@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Map Annotator</title>
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand" id="map-title">Map Annotator</div>
+      <div class="group tools" role="toolbar" aria-label="Tools">
+        <button data-tool="select" title="Select / move (V)"><span class="ico">↖</span>Select</button>
+        <button data-tool="area" title="Draw area (A)"><span class="ico">▱</span>Area</button>
+        <button data-tool="line" title="Draw line (L)"><span class="ico">〰</span>Line</button>
+        <button data-tool="point" title="Place point (P)"><span class="ico">●</span>Point</button>
+      </div>
+      <label class="group draw-as" title="Category given to newly drawn features">
+        Draw as
+        <select id="draw-category"></select>
+      </label>
+      <div class="group">
+        <button id="btn-undo" title="Undo (Ctrl+Z)">↶</button>
+        <button id="btn-redo" title="Redo (Ctrl+Shift+Z)">↷</button>
+        <button id="btn-fit" title="Fit map to view (F)">Fit</button>
+        <button id="btn-help" title="Help">?</button>
+      </div>
+      <div class="spacer"></div>
+      <div id="save-status" class="save-status">Loading…</div>
+    </header>
+
+    <main class="layout">
+      <section class="stage">
+        <div id="banner" class="banner" hidden></div>
+        <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+        <footer class="statusbar">
+          <span id="cursor-pos">—</span>
+          <span id="zoom-level"></span>
+          <span id="hint" class="hint"></span>
+        </footer>
+      </section>
+
+      <aside class="sidebar">
+        <section class="panel features-panel">
+          <h2>Features <span id="feature-count" class="muted"></span></h2>
+          <ul id="feature-list" class="feature-list"></ul>
+        </section>
+        <section class="panel inspector-panel">
+          <div id="inspector"></div>
+        </section>
+      </aside>
+    </main>
+
+    <input type="file" id="bg-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+    <div id="toasts" class="toasts"></div>
+
+    <dialog id="help">
+      <h2>Map Annotator</h2>
+      <p>
+        A 2D, single-level annotation document for laying out large maps. Everything is stored in
+        <code>map.json</code> in your map folder. Agents can read and edit that file directly and your changes and
+        theirs appear here live.
+      </p>
+      <table>
+        <tr>
+          <td><kbd>V</kbd> <kbd>A</kbd> <kbd>L</kbd> <kbd>P</kbd></td>
+          <td>Select, Area, Line, Point tools</td>
+        </tr>
+        <tr>
+          <td>Click</td>
+          <td>Add a vertex while drawing</td>
+        </tr>
+        <tr>
+          <td>Double-click / <kbd>Enter</kbd> / right-click</td>
+          <td>Finish the shape</td>
+        </tr>
+        <tr>
+          <td><kbd>Backspace</kbd></td>
+          <td>Remove last vertex while drawing, or delete the selection</td>
+        </tr>
+        <tr>
+          <td><kbd>Esc</kbd></td>
+          <td>Cancel drawing / deselect</td>
+        </tr>
+        <tr>
+          <td>Drag handles</td>
+          <td>Move vertices; click a small midpoint dot to insert one</td>
+        </tr>
+        <tr>
+          <td><kbd>Alt</kbd> + click vertex</td>
+          <td>Delete that vertex</td>
+        </tr>
+        <tr>
+          <td>Scroll</td>
+          <td>Zoom</td>
+        </tr>
+        <tr>
+          <td>Drag empty space, <kbd>Space</kbd>+drag, middle mouse</td>
+          <td>Pan</td>
+        </tr>
+        <tr>
+          <td><kbd>F</kbd></td>
+          <td>Fit map to view</td>
+        </tr>
+        <tr>
+          <td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></td>
+          <td>Undo / redo</td>
+        </tr>
+      </table>
+      <p class="muted">
+        Coordinates: (0, 0) is the top-left of the map, +x is east, +y is south. A rendered <code>preview.png</code> is
+        written next to <code>map.json</code> while the editor is open.
+      </p>
+      <form method="dialog"><button>Close</button></form>
+    </dialog>
+
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "map-annotator",
+  "version": "0.1.0",
+  "description": "A local 2D map annotation tool for laying out large-scale game maps, built so AI agents can read and write the document too.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "mapdoc": "bin/mapdoc.js"
+  },
+  "scripts": {
+    "start": "node bin/mapdoc.js serve",
+    "example": "node bin/mapdoc.js serve examples/riverlands",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

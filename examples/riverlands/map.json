@@ -1,0 +1,153 @@
+{
+  "format": "map-annotation/1",
+  "name": "Riverlands",
+  "notes": "Open-world starter region. Players arrive by boat in the south-west and push north toward the ruined keep. Keep sight lines long across the plains; the forest is the only dense cover. Three-lane feel: river valley, king's road, forest ridge.",
+  "units": "m",
+  "bounds": {
+    "width": 2000,
+    "height": 1500
+  },
+  "background": null,
+  "categories": {
+    "water": {
+      "color": "#3b82f6",
+      "description": "Rivers, lakes, coastlines"
+    },
+    "terrain": {
+      "color": "#8b7355",
+      "description": "Hills, mountains, cliffs, elevation changes"
+    },
+    "vegetation": {
+      "color": "#22a045",
+      "description": "Forests, fields, jungles"
+    },
+    "settlement": {
+      "color": "#f59e0b",
+      "description": "Towns, camps, buildings, districts"
+    },
+    "route": {
+      "color": "#a8a29e",
+      "description": "Roads, paths, bridges, travel lanes"
+    },
+    "gameplay": {
+      "color": "#a855f7",
+      "description": "Spawns, objectives, combat zones, points of interest"
+    },
+    "note": {
+      "color": "#ef4444",
+      "description": "Comments, questions and open design issues"
+    }
+  },
+  "features": [
+    {
+      "id": "eastern-woods",
+      "type": "area",
+      "name": "Eastern Woods",
+      "category": "vegetation",
+      "notes": "Dense old-growth forest. Low visibility, winding animal trails, ambush territory.",
+      "props": {
+        "density": "high"
+      },
+      "points": [
+        [1300, 250],
+        [1720, 180],
+        [1900, 420],
+        [1850, 900],
+        [1560, 1020],
+        [1360, 760]
+      ]
+    },
+    {
+      "id": "north-ridge",
+      "type": "area",
+      "name": "North Ridge",
+      "category": "terrain",
+      "notes": "Steep ridge, ~60 m above the plains. Only climbable at the switchback path.",
+      "props": {
+        "elevation": 60
+      },
+      "points": [
+        [250, 60],
+        [1150, 40],
+        [1250, 220],
+        [700, 300],
+        [300, 260]
+      ]
+    },
+    {
+      "id": "oakford",
+      "type": "area",
+      "name": "Oakford",
+      "category": "settlement",
+      "notes": "Riverside market town, the main hub. Stone bridge in the centre, timber houses around a square.",
+      "points": [
+        [760, 720],
+        [1010, 690],
+        [1060, 900],
+        [800, 950]
+      ]
+    },
+    {
+      "id": "silver-river",
+      "type": "line",
+      "name": "Silver River",
+      "category": "water",
+      "notes": "Comes down from the ridge, slow and wide by the time it reaches Oakford. Fordable only at the shallows.",
+      "width": 45,
+      "directed": true,
+      "points": [
+        [520, 120],
+        [610, 420],
+        [880, 640],
+        [900, 820],
+        [760, 1120],
+        [520, 1460]
+      ]
+    },
+    {
+      "id": "kings-road",
+      "type": "line",
+      "name": "King's Road",
+      "category": "route",
+      "notes": "Main paved road linking the harbour to the keep; crosses the river on the Oakford bridge.",
+      "width": 12,
+      "points": [
+        [180, 1380],
+        [520, 1050],
+        [900, 810],
+        [1180, 560],
+        [1000, 200]
+      ]
+    },
+    {
+      "id": "ruined-keep",
+      "type": "point",
+      "name": "Ruined Keep",
+      "category": "gameplay",
+      "notes": "Final objective. Sits on the ridge overlooking the whole region.",
+      "points": [
+        [1000, 170]
+      ]
+    },
+    {
+      "id": "harbour-spawn",
+      "type": "point",
+      "name": "Harbour Landing",
+      "category": "gameplay",
+      "notes": "Player start. Small jetty and a lighthouse.",
+      "points": [
+        [160, 1400]
+      ]
+    },
+    {
+      "id": "question-shallows",
+      "type": "point",
+      "name": "Where are the shallows?",
+      "category": "note",
+      "notes": "Should the ford be north or south of Oakford? North makes the woods more relevant.",
+      "points": [
+        [700, 500]
+      ]
+    }
+  ]
+}
